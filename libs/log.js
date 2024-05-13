@@ -1,9 +1,9 @@
 const winston = require('winston');
 
-function getLogger(module) {
+const getLogger = (module) => {
     const path = module.filename.split('/').slice(-2).join('/');
 
-    return winston.createLogger({
+    const logger = winston.createLogger({
         transports: [
             new winston.transports.Console({
                 format: winston.format.combine(
@@ -11,10 +11,17 @@ function getLogger(module) {
                     winston.format.label({ label: path }),
                     winston.format.simple()
                 ),
-                level: 'debug'
-            })
-        ]
+                level: 'debug',
+            }),
+        ],
     });
-}
+
+    return {
+        info: logger.info.bind(logger),
+        error: logger.error.bind(logger),
+        warn: logger.warn.bind(logger),
+        debug: logger.debug.bind(logger),
+    };
+};
 
 module.exports = getLogger;

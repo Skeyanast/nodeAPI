@@ -1,32 +1,38 @@
-const express         = require('express');
-const path            = require('path'); // модуль для парсинга пути
-const favicon         = require('serve-favicon');
-const log             = require('./libs/log')(module);
-const config          = require('./libs/config');
-const logger          = require('morgan');
-const bodyParser      = require('body-parser');
-const methodOverride  = require('method-override');
-const mongoose        = require('./libs/mongoose');
-const ArticleModel    = require('./libs/mongoose').ArticleModel;
-const app = express();
+const express         = require('express'); // библиотека express.js
+const path            = require('path'); // модуль для работы с путями
+const favicon         = require('serve-favicon'); // модуль для иконки сайта
+const { info, error } = require('./libs/log')(module); // пользовательский модуль логов
+const config          = require('./libs/config'); // модуль конфигурационных параметров приложения
+const logger          = require('morgan'); // модуль логирования http-запросов
+const bodyParser      = require('body-parser'); // модуль для парсинга тела http-запросов
+const methodOverride  = require('method-override'); // модуль для поддержки put и delete запросов
+const mongoose        = require('./libs/mongoose'); // модуль для работы с mongodb
+const ArticleModel    = require('./libs/mongoose').ArticleModel; // модель Mongoose для работы с коллекцией статей
+const oauth2          = require('./libs/oauth2'); // модуль для работы с авторизацией
+const passport        = require('passport'); // модуль для работы с авторизацией
 
-app.use(favicon(path.join(__dirname, 'public', 'favicon.ico')));
-app.use(logger('dev'));
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(methodOverride('_method'));
-app.use(express.static(path.join(__dirname, 'public')));
+const app = express(); // создаем экземпляр приложения express
 
-// Обработка ошибки 404
-app.use((req, res, next) => {
-    res.status(404).json({ error: 'Not found' });
-});
+app.use(favicon(path.join(__dirname, 'public', 'favicon.ico'))); // подключаем фавиконку
+app.use(logger('dev')); // подключаем логирование в режиме разработки
+app.use(bodyParser.json()); // анализ тела запроса в формате json как req.body
+app.use(bodyParser.urlencoded({ extended: true })); // анализ данных формы, парсит в req.body
+app.use(methodOverride('_method')); // поддержка нестандартных методов в запросах
+app.use(express.static(path.join(__dirname, 'public'))); // поддержка статических файлов в директории
+app.use(passport.initialize());
 
-// Обработка ошибок
-app.use((err, req, res, next) => {
-    const statusCode = err.status || 500;
-    res.status(statusCode).json({ error: err.message });
-});
+require('./libs/oauth');
+
+// Создание токена аутентификации
+app.post('/oauth/token', oauth2.token);
+
+// Защищенный эндпоинт
+app.get('/api/userInfo',
+    passport.authenticate('bearer', { session: false }),
+    function(req, res) {
+        res.json({ user_id: req.user.userId, name: req.user.username, scope: req.authInfo.scope })
+    }
+);
 
 // Получение всех статей
 app.get('/api/articles', async (req, res) => {
@@ -35,7 +41,7 @@ app.get('/api/articles', async (req, res) => {
         res.send(articles);
     } catch (err) {
         res.status(500).send({ error: 'Server error' });
-        log.error('Internal error(500):', err.message);
+        error(err);
     }
 });
 
@@ -50,7 +56,7 @@ app.post('/api/articles', async (req, res) => {
 
     try {
         await article.save();
-        log.info("Article created");
+        info("Article created");
         res.send({ status: 'OK', article });
     } catch (err) {
         if (err.name === 'ValidationError') {
@@ -58,6 +64,7 @@ app.post('/api/articles', async (req, res) => {
         }
         else {
             res.status(500).send({ error: 'Server error' });
+            error(err);
         }
     }
 });
@@ -65,7 +72,7 @@ app.post('/api/articles', async (req, res) => {
 // Получение статьи по ID
 app.get('/api/articles/:id', async (req, res) => {
     try {
-        const atricle = await ArticleModel.findById(req.params.id);
+        const article = await ArticleModel.findById(req.params.id);
         if (!article) {
             res.status(404).send({ error: 'Not found' });
             return;
@@ -73,7 +80,7 @@ app.get('/api/articles/:id', async (req, res) => {
         res.send({ status: 'OK', article });
     } catch (err) {
         res.status(500).send({ error: 'Server error' });
-        log.error('Internal error(500):', err.message);
+        error(err);
     }
 });
 
@@ -85,15 +92,15 @@ app.put('/api/articles/:id', async (req, res) => {
             res.status(404).send({ error: 'Not found' });
             return;
         }
-        log.info("Article updated");
+        info("Article updated");
         res.send({ status: 'OK', article });
     } catch (err) {
         if (err.name === 'ValidationError') {
             res.status(400).send({ error: 'Validation error' });
         } else {
             res.status(500).send({ error: 'Server error' });
+            error(err);
         }
-        log.error('Internal error(500):', err.message);
     }
 });
 
@@ -105,22 +112,39 @@ app.delete('/api/articles/:id', async (req, res) => {
             res.status(404).send({ error: 'Not found' });
             return;
         }
-        log.info("Article removed");
+        info("Article removed");
         res.send({ status: 'OK' });
     } catch (err) {
         res.status(500).send({ error: 'Server error' });
-        log.error('Internal error(500):', err.message);
+        error(err);
     }
 });
 
+// Тестовый эндпоинт
 app.get('/ErrorExample', function(req, res, next){
     next(new Error('Random error!'));
 });
 
+// Тестовый корневой эндпоинт
 app.get('/api', function (req, res) {
     res.send('API is running');
 });
 
+// Обработка ошибок
+app.use((err, req, res, next) => {
+    const statusCode = err.status || 500;
+    res.status(statusCode).json({ error: err.message });
+    error(err);
+});
+
+// Обработка ошибки 404
+app.use((req, res, next) => {
+    const err = new Error('Not found');
+    err.status = 404;
+    next(err);
+});
+
+// Прослушивание порта
 app.listen(config.get('port'), function(){
-    log.info('Express server listening on port ' + config.get('port'));
+    info(`Express server listening on port ${config.get('port')}`);
 });
